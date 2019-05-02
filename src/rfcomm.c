@@ -471,7 +471,7 @@ static int rfcomm_handler_xapl_set_cb(struct rfcomm_conn *c, const struct bt_at 
 	unsigned int vendor, product;
 	unsigned int version, features;
 
-	if (sscanf(at->value, "%x-%x-%u,%u", &vendor, &product, &version, &features) == 4) {
+	if (sscanf(at->value, "%x-%x-%x,%u", &vendor, &product, &version, &features) == 4) {
 		d->xapl.vendor_id = vendor;
 		d->xapl.product_id = product;
 		d->xapl.version = version;

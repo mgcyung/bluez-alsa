@@ -10,52 +10,71 @@
 
 #include "ba-device.h"
 
-#include <errno.h>
-#include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ba-transport.h"
-#include "ctl.h"
-#include "shared/ctl-proto.h"
+#include "utils.h"
+#include "shared/log.h"
 
 struct ba_device *ba_device_new(
 		struct ba_adapter *adapter,
-		const bdaddr_t *addr,
-		const char *name) {
+		const bdaddr_t *addr) {
 
 	struct ba_device *d;
 
 	if ((d = calloc(1, sizeof(*d))) == NULL)
 		return NULL;
 
-	d->a = adapter;
+	d->a = ba_adapter_ref(adapter);
 	bacpy(&d->addr, addr);
-	strncpy(d->name, name, sizeof(d->name) - 1);
+	d->ref_count = 1;
 
+	char tmp[sizeof("dev_XX:XX:XX:XX:XX:XX")];
+	sprintf(tmp, "dev_%.2X_%.2X_%.2X_%.2X_%.2X_%.2X",
+			addr->b[5], addr->b[4], addr->b[3], addr->b[2], addr->b[1], addr->b[0]);
+	d->ba_dbus_path = g_strdup_printf("%s/%s", adapter->ba_dbus_path, tmp);
+	d->bluez_dbus_path = g_strdup_printf("%s/%s", adapter->bluez_dbus_path, tmp);
+
+	d->battery_level = -1;
+
+	pthread_mutex_init(&d->transports_mutex, NULL);
 	d->transports = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, NULL);
 
+	pthread_mutex_lock(&adapter->devices_mutex);
 	g_hash_table_insert(adapter->devices, &d->addr, d);
+	pthread_mutex_unlock(&adapter->devices_mutex);
+
 	return d;
 }
 
 struct ba_device *ba_device_lookup(
 		struct ba_adapter *adapter,
 		const bdaddr_t *addr) {
-#if DEBUG
-	/* make sure that the device mutex is acquired */
-	g_assert(pthread_mutex_trylock(&adapter->devices_mutex) == EBUSY);
-#endif
-	return g_hash_table_lookup(adapter->devices, addr);
+
+	struct ba_device *d;
+
+	pthread_mutex_lock(&adapter->devices_mutex);
+	if ((d = g_hash_table_lookup(adapter->devices, addr)) != NULL)
+		d->ref_count++;
+	pthread_mutex_unlock(&adapter->devices_mutex);
+
+	return d;
 }
 
-void ba_device_free(struct ba_device *d) {
+struct ba_device *ba_device_ref(
+		struct ba_device *d) {
 
-	if (d == NULL)
-		return;
+	struct ba_adapter *a = d->a;
 
-	/* detach device from the adapter */
-	g_hash_table_steal(d->a->devices, &d->addr);
+	pthread_mutex_lock(&a->devices_mutex);
+	d->ref_count++;
+	pthread_mutex_unlock(&a->devices_mutex);
+
+	return d;
+}
+
+void ba_device_destroy(struct ba_device *d) {
 
 	/* XXX: Modification-safe remove-all loop.
 	 *
@@ -76,24 +95,45 @@ void ba_device_free(struct ba_device *d) {
 		GHashTableIter iter;
 		struct ba_transport *t;
 
-		g_hash_table_iter_init(&iter, d->transports);
-		if (!g_hash_table_iter_next(&iter, NULL, (gpointer)&t))
-			break;
+		pthread_mutex_lock(&d->transports_mutex);
 
-		ba_transport_free(t);
+		g_hash_table_iter_init(&iter, d->transports);
+		if (!g_hash_table_iter_next(&iter, NULL, (gpointer)&t)) {
+			pthread_mutex_unlock(&d->transports_mutex);
+			break;
+		}
+
+		t->ref_count++;
+		g_hash_table_iter_steal(&iter);
+
+		pthread_mutex_unlock(&d->transports_mutex);
+
+		ba_transport_destroy(t);
 	}
 
+	ba_device_unref(d);
+}
+
+void ba_device_unref(struct ba_device *d) {
+
+	int ref_count;
+	struct ba_adapter *a = d->a;
+
+	pthread_mutex_lock(&a->devices_mutex);
+	if ((ref_count = --d->ref_count) == 0)
+		/* detach device from the adapter */
+		g_hash_table_steal(a->devices, &d->addr);
+	pthread_mutex_unlock(&a->devices_mutex);
+
+	if (ref_count > 0)
+		return;
+
+	debug("Freeing device: %s", batostr_(&d->addr));
+
+	ba_adapter_unref(a);
 	g_hash_table_unref(d->transports);
+	pthread_mutex_destroy(&d->transports_mutex);
+	g_free(d->bluez_dbus_path);
+	g_free(d->ba_dbus_path);
 	free(d);
-}
-
-void ba_device_set_battery_level(struct ba_device *d, uint8_t value) {
-	d->battery.enabled = true;
-	d->battery.level = value;
-	bluealsa_ctl_send_event(d->a->ctl, BA_EVENT_BATTERY_CHANGED, &d->addr, 0);
-}
-
-void ba_device_set_name(struct ba_device *d, const char *name) {
-	strncpy(d->name, name, sizeof(d->name) - 1);
-	bluealsa_ctl_send_event(d->a->ctl, BA_EVENT_NAME_CHANGED, &d->addr, 0);
 }

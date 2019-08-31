@@ -15,11 +15,10 @@
 # include <config.h>
 #endif
 
-#include <stdbool.h>
+#include <pthread.h>
 #include <stdint.h>
 
 #include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
 #include <glib.h>
 
 #include "ba-adapter.h"
@@ -31,14 +30,13 @@ struct ba_device {
 
 	/* address of the Bluetooth device */
 	bdaddr_t addr;
-	/* human-readable Bluetooth device name */
-	char name[HCI_MAX_NAME_LENGTH];
 
-	/* adjusted (in the range 0-100) battery level */
-	struct {
-		bool enabled;
-		uint8_t level;
-	} battery;
+	/* data for D-Bus management */
+	char *ba_dbus_path;
+	char *bluez_dbus_path;
+
+	/* battery level in range [0, 100] or -1 */
+	int8_t battery_level;
 
 	/* Apple's extension used with HFP profile */
 	struct {
@@ -54,22 +52,25 @@ struct ba_device {
 	} xapl;
 
 	/* hash-map with connected transports */
+	pthread_mutex_t transports_mutex;
 	GHashTable *transports;
+
+	/* memory self-management */
+	int ref_count;
 
 };
 
 struct ba_device *ba_device_new(
 		struct ba_adapter *adapter,
-		const bdaddr_t *addr,
-		const char *name);
+		const bdaddr_t *addr);
 
 struct ba_device *ba_device_lookup(
 		struct ba_adapter *adapter,
 		const bdaddr_t *addr);
+struct ba_device *ba_device_ref(
+		struct ba_device *d);
 
-void ba_device_free(struct ba_device *d);
-
-void ba_device_set_battery_level(struct ba_device *d, uint8_t value);
-void ba_device_set_name(struct ba_device *d, const char *name);
+void ba_device_destroy(struct ba_device *d);
+void ba_device_unref(struct ba_device *d);
 
 #endif

@@ -84,14 +84,20 @@ START_TEST(test_dbus_profile_object_path) {
 	};
 
 	size_t i;
-
 	for (i = 0; i < ARRAYSIZE(profiles); i++) {
 		const char *path = g_dbus_transport_type_to_bluez_object_path(profiles[i].ttype);
-		struct ba_transport_type ttype = g_dbus_bluez_object_path_to_transport_type(profiles[i].path);
 		ck_assert_str_eq(strstr(profiles[i].path, path), profiles[i].path);
-		ck_assert_int_eq(ttype.profile, profiles[i].ttype.profile);
-		ck_assert_int_eq(ttype.codec, profiles[i].ttype.codec);
 	}
+
+} END_TEST
+
+START_TEST(test_g_variant_sanitize_object_path) {
+
+	char path1[] = "/some/valid_path/123";
+	char path2[] = "/a#$*/invalid-path";
+
+	ck_assert_str_eq(g_variant_sanitize_object_path(path1), "/some/valid_path/123");
+	ck_assert_str_eq(g_variant_sanitize_object_path(path2), "/a___/invalid_path");
 
 } END_TEST
 
@@ -259,6 +265,7 @@ int main(void) {
 	tcase_add_test(tc, test_g_dbus_bluez_object_path_to_hci_dev_id);
 	tcase_add_test(tc, test_g_dbus_bluez_object_path_to_bdaddr);
 	tcase_add_test(tc, test_dbus_profile_object_path);
+	tcase_add_test(tc, test_g_variant_sanitize_object_path);
 	tcase_add_test(tc, test_batostr_);
 	tcase_add_test(tc, test_snd_pcm_scale_s16le);
 	tcase_add_test(tc, test_difftimespec);

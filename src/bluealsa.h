@@ -8,8 +8,8 @@
  *
  */
 
-#ifndef BLUEALSA_BLUEALSA_H
-#define BLUEALSA_BLUEALSA_H
+#ifndef BLUEALSA_BLUEALSA_H_
+#define BLUEALSA_BLUEALSA_H_
 
 #if HAVE_CONFIG_H
 # include <config.h>
@@ -17,7 +17,7 @@
 
 #include <pthread.h>
 #include <stdbool.h>
-#include <sys/types.h>
+#include <stdint.h>
 
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/hci.h>
@@ -42,6 +42,7 @@ struct ba_config {
 	GDBusConnection *dbus;
 
 	/* adapters indexed by the HCI device ID */
+	pthread_mutex_t adapters_mutex;
 	struct ba_adapter *adapters[HCI_MAX_DEV];
 
 	/* List of HCI names (or BT addresses) used for adapters filtering
@@ -53,9 +54,6 @@ struct ba_config {
 
 	/* opened null device */
 	int null_fd;
-
-	/* audio group ID */
-	gid_t gid_audio;
 
 	struct {
 		/* set of features exposed via Service Discovery */
@@ -94,6 +92,11 @@ struct ba_config {
 #if ENABLE_AAC
 	bool aac_afterburner;
 	uint8_t aac_vbr_mode;
+#endif
+
+#if ENABLE_MP3LAME
+	uint8_t lame_quality;
+	uint8_t lame_vbr_quality;
 #endif
 
 #if ENABLE_LDAC

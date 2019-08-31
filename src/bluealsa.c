@@ -11,7 +11,6 @@
 #include "bluealsa.h"
 
 #include <fcntl.h>
-#include <grp.h>
 
 #if ENABLE_LDAC
 # include <ldacBT.h>
@@ -19,7 +18,6 @@
 
 #include "bluez-a2dp.h"
 #include "hfp.h"
-
 
 /* Initialize global configuration variable. */
 struct ba_config config = {
@@ -29,27 +27,34 @@ struct ba_config config = {
 	.enable.hfp_ag = true,
 	.enable.hsp_ag = true,
 
-	.null_fd = -1,
+	.adapters_mutex = PTHREAD_MUTEX_INITIALIZER,
 
-	/* omit chown if audio group is not defined */
-	.gid_audio = -1,
+	.null_fd = -1,
 
 	.hfp.features_sdp_hf =
 		SDP_HFP_HF_FEAT_CLI |
-		SDP_HFP_HF_FEAT_VOLUME,
-	.hfp.features_sdp_ag = 0,
+		SDP_HFP_HF_FEAT_VOLUME |
+#if ENABLE_MSBC
+		SDP_HFP_HF_FEAT_WBAND |
+#endif
+		0,
+	.hfp.features_sdp_ag =
+#if ENABLE_MSBC
+		SDP_HFP_AG_FEAT_WBAND |
+#endif
+		0,
 	.hfp.features_rfcomm_hf =
 		HFP_HF_FEAT_CLI |
 		HFP_HF_FEAT_VOLUME |
 		HFP_HF_FEAT_ECS |
 		HFP_HF_FEAT_ECC |
-		HFP_HF_FEAT_CODEC,
+		0,
 	.hfp.features_rfcomm_ag =
 		HFP_AG_FEAT_REJECT |
 		HFP_AG_FEAT_ECS |
 		HFP_AG_FEAT_ECC |
 		HFP_AG_FEAT_EERC |
-		HFP_AG_FEAT_CODEC,
+		0,
 
 	.a2dp.volume = false,
 	.a2dp.force_mono = false,
@@ -64,6 +69,12 @@ struct ba_config config = {
 	.aac_vbr_mode = 4,
 #endif
 
+#if ENABLE_MP3LAME
+	.lame_quality = 5,
+	/* Use high quality for VBR mode (~190 kbps) as a default. */
+	.lame_vbr_quality = 2,
+#endif
+
 #if ENABLE_LDAC
 	.ldac_abr = false,
 	/* Use standard encoder quality as a reasonable default. */
@@ -74,17 +85,11 @@ struct ba_config config = {
 
 int bluealsa_config_init(void) {
 
-	struct group *grp;
-
 	config.hci_filter = g_array_sized_new(FALSE, FALSE, sizeof(const char *), 4);
 
 	config.main_thread = pthread_self();
 
 	config.null_fd = open("/dev/null", O_WRONLY | O_NONBLOCK);
-
-	/* use proper ACL group for our audio device */
-	if ((grp = getgrnam("audio")) != NULL)
-		config.gid_audio = grp->gr_gid;
 
 	config.a2dp.codecs = bluez_a2dp_codecs;
 

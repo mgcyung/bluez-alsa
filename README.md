@@ -39,10 +39,15 @@ Dependencies:
 - [bluez](http://www.bluez.org/) >= 5.0
 - [glib](https://wiki.gnome.org/Projects/GLib) with GIO support
 - [sbc](https://git.kernel.org/cgit/bluetooth/sbc.git)
+- [mp3lame](http://lame.sourceforge.net/) (when MP3 support is enabled with `--enable-mp3lame`)
+- [mpg123](https://www.mpg123.org/) (when MPEG support is enabled with `--enable-mpg123`)
 - [fdk-aac](https://github.com/mstorsjo/fdk-aac) (when AAC support is enabled with `--enable-aac`)
 - [openaptx](https://github.com/Arkq/openaptx) (when apt-X support is enabled with `--enable-aptx`)
-- [libldac](https://android.googlesource.com/platform/external/libldac) (when LDAC support is
-		enabled with `--enable-ldac`)
+- [libldac](https://github.com/EHfive/ldacBT) (when LDAC support is enabled with `--enable-ldac`)
+
+Dependencies for client applications (e.g. `bluealsa-aplay`):
+
+- [libdbus](https://www.freedesktop.org/wiki/Software/dbus/)
 
 Dependencies for `bluealsa-rfcomm` (when `--enable-rfcomm` is specified during configuration):
 
@@ -60,21 +65,22 @@ it might give you a hint about required packages.
 Configuration & Usage
 ---------------------
 
-The main component of the BlueALSA is a program called `bluealsa`. It should be run as a root
-during system startup (root privileges are not required per se, the only requirement is a write
-access to `/var/run/bluealsa`). This program acts as a proxy between BlueZ and ALSA.
+The main component of BlueALSA is a program called `bluealsa`. By default, this program shall be
+run as a root during system startup. It will register `org.bluealsa` service in the D-Bus system
+bus, which can be used for accessing configured audio devices. In general, BlueALSA acts as a
+proxy between BlueZ and ALSA.
 
 In order to stream audio to the e.g. Bluetooth headset, firstly one has to connect the device. The
 most straightforward method is to use BlueZ CLI utility called `bluetoothctl`. When the device is
 connected one can use the `bluealsa` virtual PCM device as follows:
 
-	$ aplay -D bluealsa:HCI=hci0,DEV=XX:XX:XX:XX:XX:XX,PROFILE=a2dp Bourree_in_E_minor.wav
+	$ aplay -D bluealsa:SRV=org.bluealsa,DEV=XX:XX:XX:XX:XX:XX,PROFILE=a2dp Bourree_in_E_minor.wav
 
 Setup parameters of the bluealsa PCM device can be set in the local `.asoundrc` configuration file
 like this:
 
 	$ cat ~/.asoundrc
-	defaults.bluealsa.interface "hci0"
+	defaults.bluealsa.service "org.bluealsa"
 	defaults.bluealsa.device "XX:XX:XX:XX:XX:XX"
 	defaults.bluealsa.profile "a2dp"
 	defaults.bluealsa.delay 10000
@@ -130,14 +136,13 @@ Troubleshooting
 	[hacks](http://git.alsa-project.org/?p=alsa-lib.git;a=blob;f=src/pcm/pcm_ioplug.c;h=1dc198e7c99c933264fa25c9d7dbac5153bf0860;hb=1bf144013cffdeb41a5df3a11a8eb2596c5ea2b5#l682)
 	(search for "to avoid deadlock" comments) and decide for yourself.
 
-3. Couldn't bind controller socket: Address already in use
+3. Couldn't acquire D-Bus name: org.bluealsa
 
-	It is not possible to run more than one instance of the BlueALSA server per HCI device. If one
-	tries to run second instance, it fails with the `"Couldn't bind controller socket: Address
-	already in use"` error message. This error message might also appear when the previous BlueALSA
-	server has crashed unexpectedly. In order to recover from this error, one has to manually remove
-	dangling socket located in the `/var/run/bluealsa` directory (this location might be different
-	for non standard configuration).
+	It is not possible to run more than one instance of the BlueALSA server per D-Bus interface. If
+	one tries to run second instance, it will fail with the `"Couldn't acquire D-Bus name:
+	org.bluealsa"` error message. This message might also appear when D-Bus policy does not allow
+	acquiring "org.bluealsa" name for a particular user - by default only root is allowed to start
+	BlueALSA server.
 
 
 Resources

@@ -4,8 +4,8 @@
 TESTS = \
 	test-at \
 	test-ba \
-	test-ctl \
 	test-io \
+	test-msbc \
 	test-pcm \
 	test-utils
 
@@ -13,8 +13,8 @@ check_PROGRAMS = \
 	server-mock \
 	test-at \
 	test-ba \
-	test-ctl \
 	test-io \
+	test-msbc \
 	test-pcm \
 	test-utils
 
@@ -36,6 +36,7 @@ AM_CFLAGS = \
 	@GLIB2_CFLAGS@ \
 	@LDAC_ABR_CFLAGS@ \
 	@LDAC_CFLAGS@ \
+	@MPG123_CFLAGS@ \
 	@SBC_CFLAGS@
 
 LDADD = \
@@ -48,4 +49,6 @@ LDADD = \
 	@GLIB2_LIBS@ \
 	@LDAC_ABR_LIBS@ \
 	@LDAC_LIBS@ \
+	@MP3LAME_LIBS@ \
+	@MPG123_LIBS@ \
 	@SBC_LIBS@

@@ -40,7 +40,7 @@
 #define BA_TRANSPORT_PROFILE_MASK_SCO \
 	(BA_TRANSPORT_PROFILE_MASK_HFP | BA_TRANSPORT_PROFILE_MASK_HSP)
 #define IS_BA_TRANSPORT_PROFILE_SCO(p) \
-	(((p) & BA_TRANSPORT_PROFILE_MASK_SCO) == (p))
+	((p) && ((p) & BA_TRANSPORT_PROFILE_MASK_SCO) == (p))
 
 struct ba_transport_type {
 	/* Selected profile and audio codec. For A2DP vendor codecs the upper byte
@@ -54,12 +54,10 @@ enum ba_transport_state {
 	TRANSPORT_PENDING,
 	TRANSPORT_ACTIVE,
 	TRANSPORT_PAUSED,
-	/* transport is in the eviction state */
-	TRANSPORT_LIMBO,
 };
 
 enum ba_transport_signal {
-	TRANSPORT_BT_OPEN,
+	TRANSPORT_PING,
 	TRANSPORT_PCM_OPEN,
 	TRANSPORT_PCM_CLOSE,
 	TRANSPORT_PCM_PAUSE,
@@ -67,7 +65,6 @@ enum ba_transport_signal {
 	TRANSPORT_PCM_SYNC,
 	TRANSPORT_PCM_DROP,
 	TRANSPORT_SET_VOLUME,
-	TRANSPORT_SEND_RFCOMM,
 };
 
 struct ba_pcm {
@@ -87,9 +84,11 @@ struct ba_transport {
 	 * specific configuration, freeing resources, etc. */
 	struct ba_transport_type type;
 
-	/* data required for D-Bus management */
-	char *dbus_owner;
-	char *dbus_path;
+	/* data for D-Bus management */
+	char *ba_dbus_path;
+	unsigned int ba_dbus_id;
+	char *bluez_dbus_owner;
+	char *bluez_dbus_path;
 
 	/* This mutex shall guard modifications of the critical sections in this
 	 * transport structure, e.g. thread creation/termination. */
@@ -160,6 +159,9 @@ struct ba_transport {
 			/* received AG indicator values */
 			unsigned char hfp_inds[__HFP_IND_MAX];
 
+			/* external RFCOMM handler */
+			int handler_fd;
+
 		} rfcomm;
 
 		struct {
@@ -198,51 +200,62 @@ struct ba_transport {
 	int (*acquire)(struct ba_transport *);
 	int (*release)(struct ba_transport *);
 
+	/* memory self-management */
+	int ref_count;
+
 };
 
-struct ba_transport *transport_new(
+struct ba_transport *ba_transport_new(
 		struct ba_device *device,
 		struct ba_transport_type type,
 		const char *dbus_owner,
 		const char *dbus_path);
-struct ba_transport *transport_new_a2dp(
+struct ba_transport *ba_transport_new_a2dp(
 		struct ba_device *device,
 		struct ba_transport_type type,
 		const char *dbus_owner,
 		const char *dbus_path,
-		const uint8_t *cconfig,
+		const void *cconfig,
 		size_t cconfig_size);
-struct ba_transport *transport_new_rfcomm(
+struct ba_transport *ba_transport_new_rfcomm(
 		struct ba_device *device,
 		struct ba_transport_type type,
 		const char *dbus_owner,
 		const char *dbus_path);
-struct ba_transport *transport_new_sco(
+struct ba_transport *ba_transport_new_sco(
 		struct ba_device *device,
 		struct ba_transport_type type,
 		const char *dbus_owner,
-		const char *dbus_path);
+		const char *dbus_path,
+		struct ba_transport *rfcomm);
 
 struct ba_transport *ba_transport_lookup(
 		struct ba_device *device,
 		const char *dbus_path);
+struct ba_transport *ba_transport_ref(
+		struct ba_transport *t);
 
-void ba_transport_free(struct ba_transport *t);
+void ba_transport_destroy(struct ba_transport *t);
+void ba_transport_unref(struct ba_transport *t);
 
-int transport_send_signal(struct ba_transport *t, enum ba_transport_signal sig);
-int transport_send_rfcomm(struct ba_transport *t, const char command[32]);
+int ba_transport_send_signal(struct ba_transport *t, enum ba_transport_signal sig);
+enum ba_transport_signal ba_transport_recv_signal(struct ba_transport *t);
 
-unsigned int transport_get_channels(const struct ba_transport *t);
-unsigned int transport_get_sampling(const struct ba_transport *t);
+unsigned int ba_transport_get_channels(const struct ba_transport *t);
+unsigned int ba_transport_get_sampling(const struct ba_transport *t);
+uint16_t ba_transport_get_delay(const struct ba_transport *t);
 
-int transport_set_state(struct ba_transport *t, enum ba_transport_state state);
+uint16_t ba_transport_get_volume_packed(const struct ba_transport *t);
+int ba_transport_set_volume_packed(struct ba_transport *t, uint16_t value);
 
-int transport_drain_pcm(struct ba_transport *t);
-int transport_release_pcm(struct ba_pcm *pcm);
+int ba_transport_set_state(struct ba_transport *t, enum ba_transport_state state);
 
-void transport_pthread_cancel(pthread_t thread);
-void transport_pthread_cleanup(struct ba_transport *t);
-int transport_pthread_cleanup_lock(struct ba_transport *t);
-int transport_pthread_cleanup_unlock(struct ba_transport *t);
+int ba_transport_drain_pcm(struct ba_transport *t);
+int ba_transport_release_pcm(struct ba_pcm *pcm);
+
+void ba_transport_pthread_cancel(pthread_t thread);
+void ba_transport_pthread_cleanup(struct ba_transport *t);
+int ba_transport_pthread_cleanup_lock(struct ba_transport *t);
+int ba_transport_pthread_cleanup_unlock(struct ba_transport *t);
 
 #endif

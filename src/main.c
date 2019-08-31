@@ -14,14 +14,12 @@
 
 #include <getopt.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <time.h>
-
-#include <bluetooth/bluetooth.h>
-#include <bluetooth/hci.h>
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -30,8 +28,9 @@
 # include <ldacBT.h>
 #endif
 
-#include "ba-adapter.h"
 #include "bluealsa.h"
+#include "bluealsa-dbus.h"
+#include "bluealsa-iface.h"
 #include "bluez-a2dp.h"
 #include "bluez.h"
 #if ENABLE_OFONO
@@ -41,6 +40,16 @@
 #include "shared/defs.h"
 #include "shared/log.h"
 
+/* If glib does not support immediate return in case of bus
+ * name being owned by some other connection (glib < 2.54),
+ * fall back to a default behavior - enter waiting queue. */
+#ifndef G_BUS_NAME_OWNER_FLAGS_DO_NOT_QUEUE
+# define G_BUS_NAME_OWNER_FLAGS_DO_NOT_QUEUE \
+	G_BUS_NAME_OWNER_FLAGS_NONE
+#endif
+
+static GMainLoop *loop = NULL;
+static int retval = EXIT_SUCCESS;
 
 static char *get_a2dp_codecs(
 		const struct bluez_a2dp_codec **codecs,
@@ -59,7 +68,6 @@ static char *get_a2dp_codecs(
 	return g_strjoinv(", ", (char **)tmp);
 }
 
-static GMainLoop *loop = NULL;
 static void main_loop_stop(int sig) {
 	/* Call to this handler restores the default action, so on the
 	 * second call the program will be forcefully terminated. */
@@ -70,13 +78,22 @@ static void main_loop_stop(int sig) {
 	g_main_loop_quit(loop);
 }
 
+static void dbus_name_lost(GDBusConnection *conn, const char *name, void *userdata) {
+	(void)conn;
+	(void)userdata;
+	error("Couldn't acquire D-Bus name: %s", name);
+	g_main_loop_quit(loop);
+	retval = EXIT_FAILURE;
+}
+
 int main(int argc, char **argv) {
 
 	int opt;
-	const char *opts = "hVSi:p:";
+	const char *opts = "hVB:Si:p:";
 	const struct option longopts[] = {
 		{ "help", no_argument, NULL, 'h' },
 		{ "version", no_argument, NULL, 'V' },
+		{ "dbus", required_argument, NULL, 'B' },
 		{ "syslog", no_argument, NULL, 'S' },
 		{ "device", required_argument, NULL, 'i' },
 		{ "profile", required_argument, NULL, 'p' },
@@ -92,10 +109,15 @@ int main(int argc, char **argv) {
 		{ "ldac-abr", no_argument, NULL, 10 },
 		{ "ldac-eqmid", required_argument, NULL, 11 },
 #endif
+#if ENABLE_MP3LAME
+		{ "mp3-quality", required_argument, NULL, 12 },
+		{ "mp3-vbr-quality", required_argument, NULL, 13 },
+#endif
 		{ 0, 0, 0, 0 },
 	};
 
 	bool syslog = false;
+	char dbus_service[32] = BLUEALSA_SERVICE;
 
 	/* Check if syslog forwarding has been enabled. This check has to be
 	 * done before anything else, so we can log early stage warnings and
@@ -130,6 +152,7 @@ int main(int argc, char **argv) {
 					"\nOptions:\n"
 					"  -h, --help\t\tprint this help and exit\n"
 					"  -V, --version\t\tprint version and exit\n"
+					"  -B, --dbus=NAME\tD-Bus service name suffix\n"
 					"  -S, --syslog\t\tsend output to syslog\n"
 					"  -i, --device=hciX\tHCI device to use\n"
 					"  -p, --profile=NAME\tenable BT profile\n"
@@ -144,6 +167,10 @@ int main(int argc, char **argv) {
 #if ENABLE_LDAC
 					"  --ldac-abr\t\tenable adaptive bit rate\n"
 					"  --ldac-eqmid=NB\tset encoder quality to NB\n"
+#endif
+#if ENABLE_MP3LAME
+					"  --mp3-quality=NB\tset encoder quality to NB\n"
+					"  --mp3-vbr-quality=NB\tset VBR quality to NB\n"
 #endif
 					"\nAvailable BT profiles:\n"
 					"  - a2dp-source\tAdvanced Audio Source (%s)\n"
@@ -168,6 +195,10 @@ int main(int argc, char **argv) {
 		case 'V' /* --version */ :
 			printf("%s\n", PACKAGE_VERSION);
 			return EXIT_SUCCESS;
+
+		case 'B' /* --dbus=NAME */ :
+			snprintf(dbus_service, sizeof(dbus_service), BLUEALSA_SERVICE ".%s", optarg);
+			break;
 
 		case 'S' /* --syslog */ :
 			break;
@@ -247,6 +278,23 @@ int main(int argc, char **argv) {
 			break;
 #endif
 
+#if ENABLE_MP3LAME
+		case 12 /* --mp3-quality=NB */ :
+			config.lame_quality = atoi(optarg);
+			if (config.lame_quality > 9) {
+				error("Invalid encoder quality [0, 9]: %s", optarg);
+				return EXIT_FAILURE;
+			}
+			break;
+		case 13 /* --mp3-vbr-quality=NB */ :
+			config.lame_vbr_quality = atoi(optarg);
+			if (config.lame_vbr_quality > 9) {
+				error("Invalid VBR quality [0, 9]: %s", optarg);
+				return EXIT_FAILURE;
+			}
+			break;
+#endif
+
 		default:
 			fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
 			return EXIT_FAILURE;
@@ -263,7 +311,7 @@ int main(int argc, char **argv) {
 	/* initialize random number generator */
 	srandom(time(NULL));
 
-	gchar *address;
+	char *address;
 	GError *err;
 
 	err = NULL;
@@ -273,6 +321,12 @@ int main(int argc, char **argv) {
 					G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION,
 					NULL, NULL, &err)) == NULL) {
 		error("Couldn't obtain D-Bus connection: %s", err->message);
+		return EXIT_FAILURE;
+	}
+
+	err = NULL;
+	if (bluealsa_dbus_manager_register(&err) == 0) {
+		error("Couldn't register D-Bus manager: %s", err->message);
 		return EXIT_FAILURE;
 	}
 
@@ -295,18 +349,16 @@ int main(int argc, char **argv) {
 	sigaction(SIGTERM, &sigact, NULL);
 	sigaction(SIGINT, &sigact, NULL);
 
+	/* register well-known service name */
+	debug("Acquiring D-Bus service name: %s", dbus_service);
+	g_bus_own_name_on_connection(config.dbus, dbus_service,
+			G_BUS_NAME_OWNER_FLAGS_DO_NOT_QUEUE, NULL, dbus_name_lost, NULL, NULL);
+
 	/* main dispatching loop */
 	debug("Starting main dispatching loop");
 	loop = g_main_loop_new(NULL, FALSE);
 	g_main_loop_run(loop);
 
 	debug("Exiting main loop");
-
-	size_t i;
-	struct ba_adapter *a;
-	for (i = 0; i < HCI_MAX_DEV; i++)
-		if ((a = ba_adapter_lookup(i)) != NULL)
-			ba_adapter_free(a);
-
-	return EXIT_SUCCESS;
+	return retval;
 }
